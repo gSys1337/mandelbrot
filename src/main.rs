@@ -1,6 +1,8 @@
 use crate::complex_plane::ComplexPlane;
 use eframe::egui;
-use eframe::egui::{Color32, ColorImage, TextureFilter, TextureOptions};
+use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
+use eframe::egui::{Color32, ColorImage, Rect, Sense, TextureFilter, TextureOptions};
+use std::cmp::min;
 
 mod complex_plane;
 
@@ -9,18 +11,24 @@ struct MandelbrotApp {
     texture_handle: egui::TextureHandle,
     /// After how many iterations the pixel is considered to be in the Mandelbrot set.
     max_iterations: usize,
+    /// The color that numbers *outside* the Mandelbrot set are mapped to.
+    color_start: Color32,
+    /// The color that numbers *inside* the Mandelbrot set are mapped to.
+    color_end: Color32,
+    domain_history: Vec<Rect>,
+    domain_index: usize,
     resolution_x: usize,
     resolution_y: usize,
-    color_start: Color32,
-    color_end: Color32,
+    total_drag: Option<egui::Vec2>,
+    drag_start: Option<egui::Pos2>,
+    drag_end: Option<egui::Pos2>,
 }
 
 impl MandelbrotApp {
-    const DEFAULT_RESOLUTION_X: usize = 201;
-    const DEFAULT_RESOLUTION_Y: usize = 101;
     const DEFAULT_ITERATIONS: usize = 13;
     const DEFAULT_COLOR_START: Color32 = Color32::GOLD;
     const DEFAULT_COLOR_END: Color32 = Color32::BLACK;
+    const DEFAULT_DOMAIN: Rect = Rect::from_min_max(egui::pos2(-2.0, -2.0), egui::pos2(2.0, 2.0));
 
     /// Creates a new MandelbrotApp for eframe.
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -30,26 +38,41 @@ impl MandelbrotApp {
             default_image,
             TextureOptions::default(),
         );
+        let mut history = Vec::new();
+        history.push(Self::DEFAULT_DOMAIN);
         Self {
             texture_handle: handle,
-            resolution_x: Self::DEFAULT_RESOLUTION_X,
-            resolution_y: Self::DEFAULT_RESOLUTION_Y,
+            resolution_x: 1,
+            resolution_y: 1,
             max_iterations: Self::DEFAULT_ITERATIONS,
             color_start: Self::DEFAULT_COLOR_START,
             color_end: Self::DEFAULT_COLOR_END,
+            domain_history: history,
+            domain_index: 0,
+            drag_end: None,
+            drag_start: None,
+            total_drag: None,
         }
     }
 
     /// Displays the image.
     fn image(&self) -> ColorImage {
-        let raw_image: Vec<Color32> =
-            ComplexPlane::new_around_origin([self.resolution_x, self.resolution_y])
-                .generate_image(self.max_iterations)
-                .iter()
+        let raw_image: Vec<Color32> = ComplexPlane::new(
+            self.domain_history
+                .last()
                 .copied()
-                .map(|v| two_color_interpolation(self.color_start, self.color_end, v))
-                .collect();
-        ColorImage::new([self.resolution_x, self.resolution_y], raw_image)
+                .unwrap_or(Self::DEFAULT_DOMAIN),
+            [min(2048, self.resolution_x), min(2048, self.resolution_y)],
+        )
+        .generate_image(self.max_iterations)
+        .iter()
+        .copied()
+        .map(|v| two_color_interpolation(self.color_start, self.color_end, v))
+        .collect();
+        ColorImage::new(
+            [min(2048, self.resolution_x), min(2048, self.resolution_y)],
+            raw_image,
+        )
     }
 }
 
@@ -59,21 +82,22 @@ impl eframe::App for MandelbrotApp {
             ui.heading("Mandelbrot Viewer");
             ui.separator();
 
-            let resolution_x = egui::Slider::new(&mut self.resolution_x, 1..=2048)
-                .integer()
-                .text("Width")
-                .drag_value_speed(1.0);
-            ui.add(resolution_x);
-            let resolution_y = egui::Slider::new(&mut self.resolution_y, 1..=2048)
-                .integer()
-                .text("Height")
-                .drag_value_speed(1.0);
-            ui.add(resolution_y);
+            ui.label(format!("Height: {}", self.resolution_y));
+            ui.label(format!("Width: {}", self.resolution_x));
+
             let iterations = egui::Slider::new(&mut self.max_iterations, 1..=1000)
                 .integer()
                 .text("Iterations")
                 .drag_value_speed(0.5);
             ui.add(iterations);
+
+            color_edit_button_srgba(ui, &mut self.color_start, Alpha::Opaque);
+            color_edit_button_srgba(ui, &mut self.color_end, Alpha::Opaque);
+            ui.separator();
+
+            ui.label(format!("Total Drag: {:?}", self.total_drag));
+            ui.label(format!("Drag Start: {:?}", self.drag_start));
+            ui.label(format!("Drag End: {:?}", self.drag_end));
 
             ui.separator();
             if ui.button("Generate image").clicked() {
@@ -89,8 +113,30 @@ impl eframe::App for MandelbrotApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let image = egui::Image::from_texture(&self.texture_handle)
                 .shrink_to_fit()
-                .maintain_aspect_ratio(false);
-            ui.add(image);
+                .maintain_aspect_ratio(false)
+                .sense(Sense::all());
+            let img_resp = ui.add(image);
+            self.resolution_x = img_resp.rect.width() as usize;
+            self.resolution_y = img_resp.rect.height() as usize;
+            self.total_drag = img_resp.total_drag_delta();
+            if img_resp.drag_started() {
+                if let Some(pos) = img_resp.interact_pointer_pos()
+                    && img_resp.rect.contains(pos)
+                {
+                    self.drag_start = Some(pos);
+                } else {
+                    self.drag_start = None;
+                }
+            }
+            if img_resp.drag_stopped() {
+                if let Some(pos_end) = img_resp.interact_pointer_pos()
+                    && img_resp.rect.contains(pos_end)
+                    && let Some(pos_start) = self.drag_start
+                {
+                    let new_domain = Rect::from_two_pos(pos_start, pos_end);
+                    println!("New domain: {:?}", new_domain);
+                }
+            }
         });
     }
 }
