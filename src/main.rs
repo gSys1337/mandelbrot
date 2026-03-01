@@ -38,8 +38,7 @@ impl MandelbrotApp {
             default_image,
             TextureOptions::default(),
         );
-        let mut history = Vec::new();
-        history.push(Self::DEFAULT_DOMAIN);
+        let history = vec![Self::DEFAULT_DOMAIN];
         Self {
             texture_handle: handle,
             resolution_x: 1,
@@ -56,10 +55,20 @@ impl MandelbrotApp {
     }
 
     /// Displays the image.
+    fn update_image(&mut self) {
+        self.texture_handle.set(
+            self.image(),
+            TextureOptions {
+                magnification: TextureFilter::Nearest,
+                ..Default::default()
+            },
+        );
+    }
+
     fn image(&self) -> ColorImage {
         let raw_image: Vec<Color32> = ComplexPlane::new(
             self.domain_history
-                .last()
+                .get(self.domain_index)
                 .copied()
                 .unwrap_or(Self::DEFAULT_DOMAIN),
             [min(2048, self.resolution_x), min(2048, self.resolution_y)],
@@ -101,13 +110,12 @@ impl eframe::App for MandelbrotApp {
 
             ui.separator();
             if ui.button("Generate image").clicked() {
-                self.texture_handle.set(
-                    self.image(),
-                    TextureOptions {
-                        magnification: TextureFilter::Nearest,
-                        ..Default::default()
-                    },
-                );
+                self.update_image();
+            }
+            if ui.button("Reset").clicked() {
+                self.domain_history.clear();
+                self.domain_history.push(Self::DEFAULT_DOMAIN);
+                self.domain_index = 0;
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -128,13 +136,33 @@ impl eframe::App for MandelbrotApp {
                     self.drag_start = None;
                 }
             }
-            if img_resp.drag_stopped() {
-                if let Some(pos_end) = img_resp.interact_pointer_pos()
-                    && img_resp.rect.contains(pos_end)
-                    && let Some(pos_start) = self.drag_start
-                {
-                    let new_domain = Rect::from_two_pos(pos_start, pos_end);
-                    println!("New domain: {:?}", new_domain);
+            if img_resp.drag_stopped()
+                && let Some(pos_end) = img_resp.interact_pointer_pos()
+                && img_resp.rect.contains(pos_end)
+                && let Some(pos_start) = self.drag_start
+            {
+                let current_domain = self
+                    .domain_history
+                    .get(self.domain_index)
+                    .copied()
+                    .unwrap_or(Self::DEFAULT_DOMAIN);
+
+                let map_to_complex = |pos: egui::Pos2| -> egui::Pos2 {
+                    let x = current_domain.min.x
+                        + (pos.x - img_resp.rect.min.x) / img_resp.rect.width()
+                            * current_domain.width();
+                    let y = current_domain.min.y
+                        + (pos.y - img_resp.rect.min.y) / img_resp.rect.height()
+                            * current_domain.height();
+                    egui::pos2(x, y)
+                };
+
+                let new_domain =
+                    Rect::from_two_pos(map_to_complex(pos_start), map_to_complex(pos_end));
+
+                if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
+                    self.domain_history.push(new_domain);
+                    self.domain_index += 1;
                 }
             }
         });

@@ -1,8 +1,8 @@
-use std::cmp::min;
-use std::collections::HashMap;
 use eframe::egui;
 use eframe::egui::pos2;
 use num::complex::Complex64;
+use std::cmp::min;
+use std::collections::HashMap;
 
 pub struct ComplexPlane(Vec<Complex64>);
 
@@ -25,6 +25,7 @@ impl ComplexPlane {
         Self(pixels)
     }
 
+    #[allow(dead_code)]
     /// Discretizes the domain from [-2, -2] to [2, 2].
     pub fn new_around_origin(resolution: [usize; 2]) -> Self {
         Self::new(
@@ -65,5 +66,4 @@ impl ComplexPlane {
         }
         image
     }
-
 }
