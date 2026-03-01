@@ -16,7 +16,7 @@ struct MandelbrotApp {
     /// The color that numbers *inside* the Mandelbrot set are mapped to.
     color_end: Color32,
     domain_history: Vec<Rect>,
-    domain_index: usize,
+    domain_future: Vec<Rect>,
     resolution_x: usize,
     resolution_y: usize,
     total_drag: Option<egui::Vec2>,
@@ -47,7 +47,7 @@ impl MandelbrotApp {
             color_start: Self::DEFAULT_COLOR_START,
             color_end: Self::DEFAULT_COLOR_END,
             domain_history: history,
-            domain_index: 0,
+            domain_future: Vec::new(),
             drag_end: None,
             drag_start: None,
             total_drag: None,
@@ -68,7 +68,7 @@ impl MandelbrotApp {
     fn image(&self) -> ColorImage {
         let raw_image: Vec<Color32> = ComplexPlane::new(
             self.domain_history
-                .get(self.domain_index)
+                .last()
                 .copied()
                 .unwrap_or(Self::DEFAULT_DOMAIN),
             [min(2048, self.resolution_x), min(2048, self.resolution_y)],
@@ -111,21 +111,22 @@ impl eframe::App for MandelbrotApp {
             ui.separator();
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(self.domain_index > 0, egui::Button::new("Previous"))
+                    .add_enabled(self.domain_history.len() > 1, egui::Button::new("Previous"))
                     .clicked()
                 {
-                    self.domain_index -= 1;
-                    self.update_image();
+                    if let Some(domain) = self.domain_history.pop() {
+                        self.domain_future.push(domain);
+                        self.update_image();
+                    }
                 }
                 if ui
-                    .add_enabled(
-                        self.domain_index + 1 < self.domain_history.len(),
-                        egui::Button::new("Next"),
-                    )
+                    .add_enabled(!self.domain_future.is_empty(), egui::Button::new("Next"))
                     .clicked()
                 {
-                    self.domain_index += 1;
-                    self.update_image();
+                    if let Some(domain) = self.domain_future.pop() {
+                        self.domain_history.push(domain);
+                        self.update_image();
+                    }
                 }
             });
             if ui.button("Generate image").clicked() {
@@ -133,8 +134,8 @@ impl eframe::App for MandelbrotApp {
             }
             if ui.button("Reset").clicked() {
                 self.domain_history.clear();
+                self.domain_future.clear();
                 self.domain_history.push(Self::DEFAULT_DOMAIN);
-                self.domain_index = 0;
                 self.update_image();
             }
         });
@@ -163,7 +164,7 @@ impl eframe::App for MandelbrotApp {
             {
                 let current_domain = self
                     .domain_history
-                    .get(self.domain_index)
+                    .last()
                     .copied()
                     .unwrap_or(Self::DEFAULT_DOMAIN);
 
@@ -181,9 +182,8 @@ impl eframe::App for MandelbrotApp {
                     Rect::from_two_pos(map_to_complex(pos_start), map_to_complex(pos_end));
 
                 if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
-                    self.domain_history.truncate(self.domain_index + 1);
+                    self.domain_future.clear();
                     self.domain_history.push(new_domain);
-                    self.domain_index += 1;
                     self.update_image();
                 }
             }
