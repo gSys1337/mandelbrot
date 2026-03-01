@@ -1,9 +1,24 @@
 use crate::complex_plane::ComplexPlane;
 use crate::history::Domain;
 use eframe::egui;
-use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
+use eframe::egui::color_picker::{Alpha, color_edit_button_srgba};
 use eframe::egui::{Color32, ColorImage, Rect, Sense, TextureFilter, TextureOptions};
 use std::cmp::min;
+use std::sync::mpsc::{self, Receiver};
+
+enum CalculationAction {
+    ReplaceLast,
+    PushNewZoom,
+    Reset,
+}
+
+struct CalculationResult {
+    rect: Rect,
+    gray_image: Vec<f64>,
+    raw_image: Vec<Color32>,
+    size: [usize; 2],
+    action: CalculationAction,
+}
 
 mod complex_plane;
 mod history;
@@ -20,6 +35,7 @@ struct MandelbrotApp {
     resolution_x: usize,
     resolution_y: usize,
     drag_start: Option<egui::Pos2>,
+    calculation_receiver: Option<Receiver<CalculationResult>>,
 }
 
 impl MandelbrotApp {
@@ -50,51 +66,40 @@ impl MandelbrotApp {
             domain_history: history,
             domain_future: Vec::new(),
             drag_start: None,
+            calculation_receiver: None,
         }
     }
 
-    // TODO: this method should check if anything changed from the domain to current settings. (color, resolution, max_iterations)
-    /// Displays the image.
-    fn update_image(&mut self, ctx: &egui::Context) {
-        let rect = self
-            .domain_history
-            .last()
-            .map(|d| d.rect)
-            .unwrap_or(Self::DEFAULT_DOMAIN);
-        let new_domain = self.prepare_domain(ctx, rect);
-        if let Some(domain) = self.domain_history.last_mut() {
-            *domain = new_domain;
-        } else {
-            self.domain_history.push(new_domain);
-        }
-    }
+    fn start_calculation(&mut self, ctx: &egui::Context, rect: Rect, action: CalculationAction) {
+        let (tx, rx) = mpsc::channel();
+        self.calculation_receiver = Some(rx);
 
-    // TODO: make this function a method of Domain. The parameters should be rect: Rect, resolution: [usize; 2], max_iterations: usize, colors: [Color32; 2], handle, TextureHandle
-    fn prepare_domain(&self, ctx: &egui::Context, rect: Rect) -> Domain {
+        let ctx_clone = ctx.clone();
         let size = [min(2048, self.resolution_x), min(2048, self.resolution_y)];
-        let gray_image = ComplexPlane::new(rect, size).generate_image(self.max_iterations);
+        let max_iters = self.max_iterations;
+        let c_start = self.color_start;
+        let c_end = self.color_end;
 
-        let raw_image: Vec<Color32> = gray_image
-            .iter()
-            .copied()
-            .map(|v| two_color_interpolation(self.color_start, self.color_end, v))
-            .collect();
+        std::thread::spawn(move || {
+            let gray_image = ComplexPlane::new(rect, size).generate_image(max_iters);
 
-        let color_image = ColorImage::new(size, raw_image);
-        let texture = ctx.load_texture(
-            "mandelbrot buffer",
-            color_image,
-            TextureOptions {
-                magnification: TextureFilter::Nearest,
-                ..Default::default()
-            },
-        );
+            let raw_image: Vec<Color32> = gray_image
+                .iter()
+                .copied()
+                .map(|v| two_color_interpolation(c_start, c_end, v))
+                .collect();
 
-        Domain {
-            rect,
-            gray_image,
-            texture,
-        }
+            let result = CalculationResult {
+                rect,
+                gray_image,
+                raw_image,
+                size,
+                action,
+            };
+
+            let _ = tx.send(result);
+            ctx_clone.request_repaint();
+        });
     }
 
     // TODO: make this function a method of Domain
@@ -122,6 +127,49 @@ impl MandelbrotApp {
 
 impl eframe::App for MandelbrotApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx) = &self.calculation_receiver {
+            if let Ok(result) = rx.try_recv() {
+                let color_image = ColorImage::new(result.size, result.raw_image);
+                let texture = ctx.load_texture(
+                    "mandelbrot buffer",
+                    color_image,
+                    TextureOptions {
+                        magnification: TextureFilter::Nearest,
+                        ..Default::default()
+                    },
+                );
+
+                let new_domain = Domain {
+                    rect: result.rect,
+                    gray_image: result.gray_image,
+                    texture,
+                };
+
+                match result.action {
+                    CalculationAction::Reset => {
+                        self.domain_history.clear();
+                        self.domain_future.clear();
+                        self.domain_history.push(new_domain);
+                    }
+                    CalculationAction::PushNewZoom => {
+                        self.domain_future.clear();
+                        self.domain_history.push(new_domain);
+                    }
+                    CalculationAction::ReplaceLast => {
+                        if let Some(domain) = self.domain_history.last_mut() {
+                            *domain = new_domain;
+                        } else {
+                            self.domain_history.push(new_domain);
+                        }
+                    }
+                }
+
+                self.calculation_receiver = None;
+            }
+        }
+
+        let is_calculating = self.calculation_receiver.is_some();
+
         egui::SidePanel::left("left side panel").show(ctx, |ui| {
             ui.heading("Mandelbrot Viewer");
             ui.separator();
@@ -157,7 +205,10 @@ impl eframe::App for MandelbrotApp {
             ui.separator();
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(self.domain_history.len() > 1, egui::Button::new("Previous"))
+                    .add_enabled(
+                        !is_calculating && self.domain_history.len() > 1,
+                        egui::Button::new("Previous"),
+                    )
                     .clicked()
                 {
                     if let Some(domain) = self.domain_history.pop() {
@@ -170,7 +221,10 @@ impl eframe::App for MandelbrotApp {
                     }
                 }
                 if ui
-                    .add_enabled(!self.domain_future.is_empty(), egui::Button::new("Next"))
+                    .add_enabled(
+                        !is_calculating && !self.domain_future.is_empty(),
+                        egui::Button::new("Next"),
+                    )
                     .clicked()
                 {
                     if let Some(domain) = self.domain_future.pop() {
@@ -183,14 +237,27 @@ impl eframe::App for MandelbrotApp {
                     }
                 }
             });
-            if ui.button("Generate image").clicked() {
-                self.update_image(ctx);
-            }
-            if ui.button("Reset").clicked() {
-                self.domain_history.clear();
-                self.domain_future.clear();
-                let new_domain = self.prepare_domain(ctx, Self::DEFAULT_DOMAIN);
-                self.domain_history.push(new_domain);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(!is_calculating, egui::Button::new("Generate image"))
+                    .clicked()
+                {
+                    let rect = self
+                        .domain_history
+                        .last()
+                        .map(|d| d.rect)
+                        .unwrap_or(Self::DEFAULT_DOMAIN);
+                    self.start_calculation(ctx, rect, CalculationAction::ReplaceLast);
+                }
+                if is_calculating {
+                    ui.spinner();
+                }
+            });
+            if ui
+                .add_enabled(!is_calculating, egui::Button::new("Reset"))
+                .clicked()
+            {
+                self.start_calculation(ctx, Self::DEFAULT_DOMAIN, CalculationAction::Reset);
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -206,7 +273,7 @@ impl eframe::App for MandelbrotApp {
             let img_resp = ui.add(image);
             self.resolution_x = img_resp.rect.width() as usize;
             self.resolution_y = img_resp.rect.height() as usize;
-            if img_resp.drag_started() {
+            if img_resp.drag_started() && !is_calculating {
                 if let Some(pos) = img_resp.interact_pointer_pos()
                     && img_resp.rect.contains(pos)
                 {
@@ -216,6 +283,7 @@ impl eframe::App for MandelbrotApp {
                 }
             }
             if img_resp.drag_stopped()
+                && !is_calculating
                 && let Some(pos_end) = img_resp.interact_pointer_pos()
                 && img_resp.rect.contains(pos_end)
                 && let Some(pos_start) = self.drag_start
@@ -240,9 +308,7 @@ impl eframe::App for MandelbrotApp {
                     Rect::from_two_pos(map_to_complex(pos_start), map_to_complex(pos_end));
 
                 if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
-                    self.domain_future.clear();
-                    let prepared_domain = self.prepare_domain(ctx, new_domain);
-                    self.domain_history.push(prepared_domain);
+                    self.start_calculation(ctx, new_domain, CalculationAction::PushNewZoom);
                 }
             }
         });
