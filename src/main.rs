@@ -1,5 +1,4 @@
-use crate::complex_plane::ComplexPlane;
-use crate::history::Domain;
+use crate::mandel_set::{Codomain, Domain};
 use eframe::egui;
 use eframe::egui::color_picker::{Alpha, color_edit_button_srgba};
 use eframe::egui::{Color32, ColorImage, Rect, Sense, TextureFilter, TextureOptions};
@@ -14,14 +13,13 @@ enum CalculationAction {
 
 struct CalculationResult {
     rect: Rect,
-    gray_image: Vec<f64>,
+    image: Vec<f64>,
     raw_image: Vec<Color32>,
     size: [usize; 2],
     action: CalculationAction,
 }
 
-mod complex_plane;
-mod history;
+mod mandel_set;
 
 struct MandelbrotApp {
     /// After how many iterations the pixel is considered to be in the Mandelbrot set.
@@ -30,8 +28,8 @@ struct MandelbrotApp {
     color_start: Color32,
     /// The color that numbers *inside* the Mandelbrot set are mapped to.
     color_end: Color32,
-    domain_history: Vec<Domain>,
-    domain_future: Vec<Domain>,
+    codomain_history: Vec<Codomain>,
+    codomain_future: Vec<Codomain>,
     resolution_x: usize,
     resolution_y: usize,
     drag_start: Option<egui::Pos2>,
@@ -52,9 +50,9 @@ impl MandelbrotApp {
             default_image,
             TextureOptions::default(),
         );
-        let history = vec![Domain {
+        let history = vec![Codomain {
             rect: Self::DEFAULT_DOMAIN,
-            gray_image: Vec::new(),
+            image: Vec::new(),
             texture: handle,
         }];
         Self {
@@ -63,8 +61,8 @@ impl MandelbrotApp {
             max_iterations: Self::DEFAULT_ITERATIONS,
             color_start: Self::DEFAULT_COLOR_START,
             color_end: Self::DEFAULT_COLOR_END,
-            domain_history: history,
-            domain_future: Vec::new(),
+            codomain_history: history,
+            codomain_future: Vec::new(),
             drag_start: None,
             calculation_receiver: None,
         }
@@ -81,9 +79,9 @@ impl MandelbrotApp {
         let c_end = self.color_end;
 
         std::thread::spawn(move || {
-            let gray_image = ComplexPlane::new(rect, size).generate_image(max_iters);
+            let image = Domain::new(rect, size).generate_image(max_iters);
 
-            let raw_image: Vec<Color32> = gray_image
+            let raw_image: Vec<Color32> = image
                 .iter()
                 .copied()
                 .map(|v| two_color_interpolation(c_start, c_end, v))
@@ -91,7 +89,7 @@ impl MandelbrotApp {
 
             let result = CalculationResult {
                 rect,
-                gray_image,
+                image,
                 raw_image,
                 size,
                 action,
@@ -102,74 +100,45 @@ impl MandelbrotApp {
         });
     }
 
-    // TODO: make this function a method of Domain
-    fn apply_colors(domain: &mut Domain, color_start: Color32, color_end: Color32) {
-        if domain.gray_image.is_empty() {
-            return;
-        }
-        let size = domain.texture.size();
-        let raw_image: Vec<Color32> = domain
-            .gray_image
-            .iter()
-            .copied()
-            .map(|v| two_color_interpolation(color_start, color_end, v))
-            .collect();
-        let color_image = ColorImage::new(size, raw_image);
-        domain.texture.set(
+    fn handle_calculation_result(&mut self, ctx: &egui::Context, result: CalculationResult) {
+        let color_image = ColorImage::new(result.size, result.raw_image);
+        let texture = ctx.load_texture(
+            "mandelbrot buffer",
             color_image,
             TextureOptions {
                 magnification: TextureFilter::Nearest,
                 ..Default::default()
             },
         );
-    }
-}
 
-impl eframe::App for MandelbrotApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(rx) = &self.calculation_receiver {
-            if let Ok(result) = rx.try_recv() {
-                let color_image = ColorImage::new(result.size, result.raw_image);
-                let texture = ctx.load_texture(
-                    "mandelbrot buffer",
-                    color_image,
-                    TextureOptions {
-                        magnification: TextureFilter::Nearest,
-                        ..Default::default()
-                    },
-                );
+        let new_codomain = Codomain {
+            rect: result.rect,
+            image: result.image,
+            texture,
+        };
 
-                let new_domain = Domain {
-                    rect: result.rect,
-                    gray_image: result.gray_image,
-                    texture,
-                };
-
-                match result.action {
-                    CalculationAction::Reset => {
-                        self.domain_history.clear();
-                        self.domain_future.clear();
-                        self.domain_history.push(new_domain);
-                    }
-                    CalculationAction::PushNewZoom => {
-                        self.domain_future.clear();
-                        self.domain_history.push(new_domain);
-                    }
-                    CalculationAction::ReplaceLast => {
-                        if let Some(domain) = self.domain_history.last_mut() {
-                            *domain = new_domain;
-                        } else {
-                            self.domain_history.push(new_domain);
-                        }
-                    }
+        match result.action {
+            CalculationAction::Reset => {
+                self.codomain_history.clear();
+                self.codomain_future.clear();
+                self.codomain_history.push(new_codomain);
+            }
+            CalculationAction::PushNewZoom => {
+                self.codomain_future.clear();
+                self.codomain_history.push(new_codomain);
+            }
+            CalculationAction::ReplaceLast => {
+                if let Some(codomain) = self.codomain_history.last_mut() {
+                    *codomain = new_codomain;
+                } else {
+                    self.codomain_history.push(new_codomain);
                 }
-
-                self.calculation_receiver = None;
             }
         }
+        self.calculation_receiver = None;
+    }
 
-        let is_calculating = self.calculation_receiver.is_some();
-
+    fn show_left_sidepanel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("left side panel").show(ctx, |ui| {
             ui.heading("Mandelbrot Viewer");
             ui.separator();
@@ -190,79 +159,88 @@ impl eframe::App for MandelbrotApp {
                 color_edit_button_srgba(ui, &mut self.color_end, Alpha::Opaque).changed();
             ui.separator();
 
-            if colors_changed && let Some(domain) = self.domain_history.last_mut() {
+            if colors_changed && let Some(codomain) = self.codomain_history.last_mut() {
                 let color_start = self.color_start;
                 let color_end = self.color_end;
-                Self::apply_colors(domain, color_start, color_end);
+                codomain.apply_colors(color_start, color_end);
             }
 
-            if let Some(domain) = self.domain_history.last() {
-                ui.label("Current domain:");
-                ui.label(format!("Min: {:.6?}", domain.rect.min));
-                ui.label(format!("Max: {:.6?}", domain.rect.max));
+            if let Some(codomain) = self.codomain_history.last() {
+                ui.label("Current restriction:");
+                ui.label(format!("Min: {:.6?}", codomain.rect.min));
+                ui.label(format!("Max: {:.6?}", codomain.rect.max));
             }
 
             ui.separator();
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !is_calculating && self.domain_history.len() > 1,
+                        self.calculation_receiver.is_none() && self.codomain_history.len() > 1,
                         egui::Button::new("Previous"),
                     )
                     .clicked()
                 {
-                    if let Some(domain) = self.domain_history.pop() {
-                        self.domain_future.push(domain);
+                    if let Some(codomain) = self.codomain_history.pop() {
+                        self.codomain_future.push(codomain);
                     }
-                    if let Some(domain) = self.domain_history.last_mut() {
+                    if let Some(codomain) = self.codomain_history.last_mut() {
                         let color_start = self.color_start;
                         let color_end = self.color_end;
-                        Self::apply_colors(domain, color_start, color_end);
+                        codomain.apply_colors(color_start, color_end);
                     }
                 }
                 if ui
                     .add_enabled(
-                        !is_calculating && !self.domain_future.is_empty(),
+                        self.calculation_receiver.is_none() && !self.codomain_future.is_empty(),
                         egui::Button::new("Next"),
                     )
                     .clicked()
                 {
-                    if let Some(domain) = self.domain_future.pop() {
-                        self.domain_history.push(domain);
+                    if let Some(codomain) = self.codomain_future.pop() {
+                        self.codomain_history.push(codomain);
                     }
-                    if let Some(domain) = self.domain_history.last_mut() {
+                    if let Some(codomain) = self.codomain_history.last_mut() {
                         let color_start = self.color_start;
                         let color_end = self.color_end;
-                        Self::apply_colors(domain, color_start, color_end);
+                        codomain.apply_colors(color_start, color_end);
                     }
                 }
             });
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(!is_calculating, egui::Button::new("Generate image"))
+                    .add_enabled(
+                        self.calculation_receiver.is_none(),
+                        egui::Button::new("Generate image"),
+                    )
                     .clicked()
                 {
                     let rect = self
-                        .domain_history
+                        .codomain_history
                         .last()
                         .map(|d| d.rect)
                         .unwrap_or(Self::DEFAULT_DOMAIN);
                     self.start_calculation(ctx, rect, CalculationAction::ReplaceLast);
                 }
-                if is_calculating {
+                if self.calculation_receiver.is_some() {
                     ui.spinner();
                 }
             });
             if ui
-                .add_enabled(!is_calculating, egui::Button::new("Reset"))
+                .add_enabled(
+                    self.calculation_receiver.is_none(),
+                    egui::Button::new("Reset"),
+                )
                 .clicked()
             {
                 self.start_calculation(ctx, Self::DEFAULT_DOMAIN, CalculationAction::Reset);
             }
         });
+    }
+
+    fn show_central_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             let current_texture = &self
-                .domain_history
+                .codomain_history
                 .last()
                 .expect("History should never be empty")
                 .texture;
@@ -273,7 +251,7 @@ impl eframe::App for MandelbrotApp {
             let img_resp = ui.add(image);
             self.resolution_x = img_resp.rect.width() as usize;
             self.resolution_y = img_resp.rect.height() as usize;
-            if img_resp.drag_started() && !is_calculating {
+            if img_resp.drag_started() && self.calculation_receiver.is_none() {
                 if let Some(pos) = img_resp.interact_pointer_pos()
                     && img_resp.rect.contains(pos)
                 {
@@ -283,13 +261,13 @@ impl eframe::App for MandelbrotApp {
                 }
             }
             if img_resp.drag_stopped()
-                && !is_calculating
+                && self.calculation_receiver.is_none()
                 && let Some(pos_end) = img_resp.interact_pointer_pos()
                 && img_resp.rect.contains(pos_end)
                 && let Some(pos_start) = self.drag_start
             {
                 let current_domain_rect = self
-                    .domain_history
+                    .codomain_history
                     .last()
                     .map(|d| d.rect)
                     .unwrap_or(Self::DEFAULT_DOMAIN);
@@ -304,14 +282,26 @@ impl eframe::App for MandelbrotApp {
                     egui::pos2(x, y)
                 };
 
-                let new_domain =
+                let new_restriction =
                     Rect::from_two_pos(map_to_complex(pos_start), map_to_complex(pos_end));
 
-                if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
-                    self.start_calculation(ctx, new_domain, CalculationAction::PushNewZoom);
+                if new_restriction.width() > 0.0 && new_restriction.height() > 0.0 {
+                    self.start_calculation(ctx, new_restriction, CalculationAction::PushNewZoom);
                 }
             }
         });
+    }
+}
+
+impl eframe::App for MandelbrotApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx) = &self.calculation_receiver
+            && let Ok(result) = rx.try_recv()
+        {
+            self.handle_calculation_result(ctx, result);
+        }
+        self.show_left_sidepanel(ctx);
+        self.show_central_panel(ctx);
     }
 }
 
@@ -327,7 +317,7 @@ fn main() -> eframe::Result {
     )
 }
 
-fn two_color_interpolation(start: Color32, end: Color32, fraction: f64) -> Color32 {
+pub fn two_color_interpolation(start: Color32, end: Color32, fraction: f64) -> Color32 {
     let add = u8::wrapping_add;
     let sub = u8::wrapping_sub;
     Color32::from_rgba_premultiplied(

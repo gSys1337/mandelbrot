@@ -1,20 +1,21 @@
 use eframe::egui;
 use eframe::egui::pos2;
+use eframe::egui::{Color32, ColorImage, Rect, TextureFilter, TextureHandle, TextureOptions};
 use num::complex::Complex64;
 use std::cmp::min;
 use std::collections::HashMap;
 
-pub struct ComplexPlane(Vec<Complex64>);
+pub struct Domain(Vec<Complex64>);
 
-impl ComplexPlane {
-    /// Discretizes the domain into a grid with the given resolution.
-    pub fn new(domain: egui::Rect, resolution: [usize; 2]) -> Self {
+impl Domain {
+    /// Discretizes the restriction into a grid with the given resolution.
+    pub fn new(restriction: egui::Rect, resolution: [usize; 2]) -> Self {
         let mut pixels: Vec<Complex64> = Vec::new();
-        let delta_x = domain.width() / resolution[0] as f32;
-        let delta_y = domain.height() / resolution[1] as f32;
-        let mut y = domain.min.y;
+        let delta_x = restriction.width() / resolution[0] as f32;
+        let delta_y = restriction.height() / resolution[1] as f32;
+        let mut y = restriction.min.y;
         for _y in 0..resolution[1] {
-            let mut x = domain.min.x;
+            let mut x = restriction.min.x;
             for _x in 0..resolution[0] {
                 let pixel = Complex64::new(x as f64, y as f64);
                 pixels.push(pixel);
@@ -26,7 +27,7 @@ impl ComplexPlane {
     }
 
     #[allow(dead_code)]
-    /// Discretizes the domain from [-2, -2] to [2, 2].
+    /// Discretizes the restriction from [-2, -2] to [2, 2].
     pub fn new_around_origin(resolution: [usize; 2]) -> Self {
         Self::new(
             egui::Rect::from_min_max(pos2(-2.0, -2.0), pos2(2.0, 2.0)),
@@ -36,12 +37,13 @@ impl ComplexPlane {
 
     /// Map the subset of the complex plane into a gray-scaled image.
     pub fn generate_image(self, max_iterations: usize) -> Vec<f64> {
-        let ComplexPlane(pixels) = self;
+        let Domain(pixels) = self;
         let mut iterations_counted = Vec::new();
         let mut histogram: HashMap<usize, usize> =
             HashMap::with_capacity(min(max_iterations, pixels.len()));
         // These are the usual mandelbrot operations
-        for pixel_init in pixels {  // TODO make this loop concurrent with rayon crate
+        for pixel_init in pixels {
+            // TODO make this loop concurrent with rayon crate
             let mut iterations = 0usize;
             let mut pixel = Complex64::new(0.0, 0.0);
             while pixel.norm_sqr() < 4.0 && iterations < max_iterations {
@@ -65,5 +67,34 @@ impl ComplexPlane {
             image.push(hue);
         }
         image
+    }
+}
+
+pub struct Codomain {
+    pub rect: Rect,
+    pub image: Vec<f64>,
+    pub texture: TextureHandle,
+}
+
+impl Codomain {
+    pub fn apply_colors(&mut self, color_start: Color32, color_end: Color32) {
+        if self.image.is_empty() {
+            return;
+        }
+        let size = self.texture.size();
+        let raw_image: Vec<Color32> = self
+            .image
+            .iter()
+            .copied()
+            .map(|v| crate::two_color_interpolation(color_start, color_end, v))
+            .collect();
+        let color_image = ColorImage::new(size, raw_image);
+        self.texture.set(
+            color_image,
+            TextureOptions {
+                magnification: TextureFilter::Nearest,
+                ..Default::default()
+            },
+        );
     }
 }
