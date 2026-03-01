@@ -2,6 +2,7 @@ use eframe::egui;
 use eframe::egui::pos2;
 use eframe::egui::{Color32, ColorImage, Rect, TextureFilter, TextureHandle, TextureOptions};
 use num::complex::Complex64;
+use rayon::prelude::*;
 use std::cmp::min;
 use std::collections::HashMap;
 
@@ -38,34 +39,43 @@ impl Domain {
     /// Map the subset of the complex plane into a gray-scaled image.
     pub fn generate_image(self, max_iterations: usize) -> Vec<f64> {
         let Domain(pixels) = self;
-        let mut iterations_counted = Vec::new();
+
+        // Ensure we calculate the mandelbrot operations in parallel
+        let iterations_counted: Vec<usize> = pixels
+            .into_par_iter()
+            .map(|pixel_init| {
+                let mut iterations = 0usize;
+                let mut pixel = Complex64::new(0.0, 0.0);
+                while pixel.norm_sqr() < 4.0 && iterations < max_iterations {
+                    pixel = pixel * pixel + pixel_init;
+                    iterations += 1;
+                }
+                iterations
+            })
+            .collect();
+
         let mut histogram: HashMap<usize, usize> =
-            HashMap::with_capacity(min(max_iterations, pixels.len()));
-        // These are the usual mandelbrot operations
-        for pixel_init in pixels {
-            // TODO make this loop concurrent with rayon crate
-            let mut iterations = 0usize;
-            let mut pixel = Complex64::new(0.0, 0.0);
-            while pixel.norm_sqr() < 4.0 && iterations < max_iterations {
-                pixel = pixel * pixel + pixel_init;
-                iterations += 1;
-            }
-            iterations_counted.push(iterations);
+            HashMap::with_capacity(min(max_iterations, iterations_counted.len()));
+
+        for &iterations in &iterations_counted {
             histogram
                 .entry(iterations)
                 .and_modify(|count| *count += 1)
                 .or_insert(1);
         }
+
         // This is only coloring
         let total_iterations = histogram.values().sum::<usize>();
-        let mut image = Vec::new();
-        for pixel in iterations_counted {
-            let hue = (0..=pixel)
-                .map(|i| histogram.get(&i).copied().unwrap_or_default())
-                .sum::<usize>() as f64
-                / total_iterations as f64;
-            image.push(hue);
-        }
+        let image: Vec<f64> = iterations_counted
+            .into_par_iter()
+            .map(|pixel| {
+                (0..=pixel)
+                    .map(|i| histogram.get(&i).copied().unwrap_or_default())
+                    .sum::<usize>() as f64
+                    / total_iterations as f64
+            })
+            .collect();
+
         image
     }
 }

@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 num = "0.4"
 eframe = "0.33"
+rayon = "1.11.0"
