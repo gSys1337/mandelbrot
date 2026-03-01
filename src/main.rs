@@ -1,7 +1,8 @@
-use crate::mandel_set::{Codomain, Domain};
 use eframe::egui;
 use eframe::egui::color_picker::{Alpha, color_edit_button_srgba};
 use eframe::egui::{Color32, ColorImage, Rect, Sense, TextureFilter, TextureOptions};
+use mandelbrot_test::mandel_set::{Codomain, Domain};
+use mandelbrot_test::two_color_interpolation;
 use std::cmp::min;
 use std::sync::mpsc::{self, Receiver};
 
@@ -18,8 +19,6 @@ struct CalculationResult {
     size: [usize; 2],
     action: CalculationAction,
 }
-
-mod mandel_set;
 
 struct MandelbrotApp {
     /// After how many iterations the pixel is considered to be in the Mandelbrot set.
@@ -314,16 +313,5 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(MandelbrotApp::new(cc)))),
-    )
-}
-
-pub fn two_color_interpolation(start: Color32, end: Color32, fraction: f64) -> Color32 {
-    let add = u8::wrapping_add;
-    let sub = u8::wrapping_sub;
-    Color32::from_rgba_premultiplied(
-        add(start.r(), (sub(end.r(), start.r()) as f64 * fraction) as u8),
-        add(start.g(), (sub(end.g(), start.g()) as f64 * fraction) as u8),
-        add(start.b(), (sub(end.b(), start.b()) as f64 * fraction) as u8),
-        add(start.a(), (sub(end.a(), start.a()) as f64 * fraction) as u8),
     )
 }

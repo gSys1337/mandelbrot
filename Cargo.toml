@@ -7,3 +7,10 @@ edition = "2024"
 num = "0.4"
 eframe = "0.33"
 rayon = "1.11.0"
+
+[dev-dependencies]
+rand = "0.10.0"
+
+[[bench]]
+name = "performance"
+harness = false
