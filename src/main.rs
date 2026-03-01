@@ -1,6 +1,6 @@
 use crate::complex_plane::ComplexPlane;
 use eframe::egui;
-use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
+use eframe::egui::color_picker::{Alpha, color_edit_button_srgba};
 use eframe::egui::{Color32, ColorImage, Rect, Sense, TextureFilter, TextureOptions};
 use std::cmp::min;
 
@@ -109,6 +109,25 @@ impl eframe::App for MandelbrotApp {
             ui.label(format!("Drag End: {:?}", self.drag_end));
 
             ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(self.domain_index > 0, egui::Button::new("Previous"))
+                    .clicked()
+                {
+                    self.domain_index -= 1;
+                    self.update_image();
+                }
+                if ui
+                    .add_enabled(
+                        self.domain_index + 1 < self.domain_history.len(),
+                        egui::Button::new("Next"),
+                    )
+                    .clicked()
+                {
+                    self.domain_index += 1;
+                    self.update_image();
+                }
+            });
             if ui.button("Generate image").clicked() {
                 self.update_image();
             }
@@ -116,6 +135,7 @@ impl eframe::App for MandelbrotApp {
                 self.domain_history.clear();
                 self.domain_history.push(Self::DEFAULT_DOMAIN);
                 self.domain_index = 0;
+                self.update_image();
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -161,8 +181,10 @@ impl eframe::App for MandelbrotApp {
                     Rect::from_two_pos(map_to_complex(pos_start), map_to_complex(pos_end));
 
                 if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
+                    self.domain_history.truncate(self.domain_index + 1);
                     self.domain_history.push(new_domain);
                     self.domain_index += 1;
+                    self.update_image();
                 }
             }
         });
