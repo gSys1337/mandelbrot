@@ -1,7 +1,7 @@
 use crate::complex_plane::ComplexPlane;
 use crate::history::Domain;
 use eframe::egui;
-use eframe::egui::color_picker::{Alpha, color_edit_button_srgba};
+use eframe::egui::color_picker::{color_edit_button_srgba, Alpha};
 use eframe::egui::{Color32, ColorImage, Rect, Sense, TextureFilter, TextureOptions};
 use std::cmp::min;
 
@@ -19,9 +19,7 @@ struct MandelbrotApp {
     domain_future: Vec<Domain>,
     resolution_x: usize,
     resolution_y: usize,
-    total_drag: Option<egui::Vec2>,
     drag_start: Option<egui::Pos2>,
-    drag_end: Option<egui::Pos2>,
 }
 
 impl MandelbrotApp {
@@ -50,9 +48,7 @@ impl MandelbrotApp {
             color_end: Self::DEFAULT_COLOR_END,
             domain_history: history,
             domain_future: Vec::new(),
-            drag_end: None,
             drag_start: None,
-            total_drag: None,
         }
     }
 
@@ -111,9 +107,11 @@ impl eframe::App for MandelbrotApp {
             color_edit_button_srgba(ui, &mut self.color_end, Alpha::Opaque);
             ui.separator();
 
-            ui.label(format!("Total Drag: {:?}", self.total_drag));
-            ui.label(format!("Drag Start: {:?}", self.drag_start));
-            ui.label(format!("Drag End: {:?}", self.drag_end));
+            if let Some(domain) = self.domain_history.last() {
+                ui.label("Current domain:");
+                ui.label(format!("Min: {:.6?}", domain.rect.min));
+                ui.label(format!("Max: {:.6?}", domain.rect.max));
+            }
 
             ui.separator();
             ui.horizontal(|ui| {
@@ -140,16 +138,20 @@ impl eframe::App for MandelbrotApp {
             if ui.button("Reset").clicked() {
                 self.domain_history.clear();
                 self.domain_future.clear();
+
                 let handle = ctx.load_texture(
                     "mandelbrot buffer",
-                    ColorImage::default(),
-                    TextureOptions::default(),
+                    self.image(Self::DEFAULT_DOMAIN),
+                    TextureOptions {
+                        magnification: TextureFilter::Nearest,
+                        ..Default::default()
+                    },
                 );
+
                 self.domain_history.push(Domain {
                     rect: Self::DEFAULT_DOMAIN,
                     texture: handle,
                 });
-                self.update_image();
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -165,7 +167,6 @@ impl eframe::App for MandelbrotApp {
             let img_resp = ui.add(image);
             self.resolution_x = img_resp.rect.width() as usize;
             self.resolution_y = img_resp.rect.height() as usize;
-            self.total_drag = img_resp.total_drag_delta();
             if img_resp.drag_started() {
                 if let Some(pos) = img_resp.interact_pointer_pos()
                     && img_resp.rect.contains(pos)
@@ -201,16 +202,20 @@ impl eframe::App for MandelbrotApp {
 
                 if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
                     self.domain_future.clear();
+
                     let handle = ctx.load_texture(
                         "mandelbrot buffer",
-                        ColorImage::default(),
-                        TextureOptions::default(),
+                        self.image(new_domain),
+                        TextureOptions {
+                            magnification: TextureFilter::Nearest,
+                            ..Default::default()
+                        },
                     );
+
                     self.domain_history.push(Domain {
                         rect: new_domain,
                         texture: handle,
                     });
-                    self.update_image();
                 }
             }
         });
