@@ -41,7 +41,7 @@ impl ComplexPlane {
         let mut histogram: HashMap<usize, usize> =
             HashMap::with_capacity(min(max_iterations, pixels.len()));
         // These are the usual mandelbrot operations
-        for pixel_init in pixels {
+        for pixel_init in pixels {  // TODO make this loop concurrent with rayon crate
             let mut iterations = 0usize;
             let mut pixel = Complex64::new(0.0, 0.0);
             while pixel.norm_sqr() < 4.0 && iterations < max_iterations {

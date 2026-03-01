@@ -38,6 +38,7 @@ impl MandelbrotApp {
         );
         let history = vec![Domain {
             rect: Self::DEFAULT_DOMAIN,
+            gray_image: Vec::new(),
             texture: handle,
         }];
         Self {
@@ -52,39 +53,70 @@ impl MandelbrotApp {
         }
     }
 
+    // TODO: this method should check if anything changed from the domain to current settings. (color, resolution, max_iterations)
     /// Displays the image.
-    fn update_image(&mut self) {
+    fn update_image(&mut self, ctx: &egui::Context) {
         let rect = self
             .domain_history
             .last()
             .map(|d| d.rect)
             .unwrap_or(Self::DEFAULT_DOMAIN);
-        let image = self.image(rect);
+        let new_domain = self.prepare_domain(ctx, rect);
         if let Some(domain) = self.domain_history.last_mut() {
-            domain.texture.set(
-                image,
-                TextureOptions {
-                    magnification: TextureFilter::Nearest,
-                    ..Default::default()
-                },
-            );
+            *domain = new_domain;
+        } else {
+            self.domain_history.push(new_domain);
         }
     }
 
-    fn image(&self, rect: Rect) -> ColorImage {
-        let raw_image: Vec<Color32> = ComplexPlane::new(
+    // TODO: make this function a method of Domain. The parameters should be rect: Rect, resolution: [usize; 2], max_iterations: usize, colors: [Color32; 2], handle, TextureHandle
+    fn prepare_domain(&self, ctx: &egui::Context, rect: Rect) -> Domain {
+        let size = [min(2048, self.resolution_x), min(2048, self.resolution_y)];
+        let gray_image = ComplexPlane::new(rect, size).generate_image(self.max_iterations);
+
+        let raw_image: Vec<Color32> = gray_image
+            .iter()
+            .copied()
+            .map(|v| two_color_interpolation(self.color_start, self.color_end, v))
+            .collect();
+
+        let color_image = ColorImage::new(size, raw_image);
+        let texture = ctx.load_texture(
+            "mandelbrot buffer",
+            color_image,
+            TextureOptions {
+                magnification: TextureFilter::Nearest,
+                ..Default::default()
+            },
+        );
+
+        Domain {
             rect,
-            [min(2048, self.resolution_x), min(2048, self.resolution_y)],
-        )
-        .generate_image(self.max_iterations)
-        .iter()
-        .copied()
-        .map(|v| two_color_interpolation(self.color_start, self.color_end, v))
-        .collect();
-        ColorImage::new(
-            [min(2048, self.resolution_x), min(2048, self.resolution_y)],
-            raw_image,
-        )
+            gray_image,
+            texture,
+        }
+    }
+
+    // TODO: make this function a method of Domain
+    fn apply_colors(domain: &mut Domain, color_start: Color32, color_end: Color32) {
+        if domain.gray_image.is_empty() {
+            return;
+        }
+        let size = domain.texture.size();
+        let raw_image: Vec<Color32> = domain
+            .gray_image
+            .iter()
+            .copied()
+            .map(|v| two_color_interpolation(color_start, color_end, v))
+            .collect();
+        let color_image = ColorImage::new(size, raw_image);
+        domain.texture.set(
+            color_image,
+            TextureOptions {
+                magnification: TextureFilter::Nearest,
+                ..Default::default()
+            },
+        );
     }
 }
 
@@ -103,9 +135,18 @@ impl eframe::App for MandelbrotApp {
                 .drag_value_speed(0.5);
             ui.add(iterations);
 
-            color_edit_button_srgba(ui, &mut self.color_start, Alpha::Opaque);
-            color_edit_button_srgba(ui, &mut self.color_end, Alpha::Opaque);
+            let mut colors_changed = false;
+            colors_changed |=
+                color_edit_button_srgba(ui, &mut self.color_start, Alpha::Opaque).changed();
+            colors_changed |=
+                color_edit_button_srgba(ui, &mut self.color_end, Alpha::Opaque).changed();
             ui.separator();
+
+            if colors_changed && let Some(domain) = self.domain_history.last_mut() {
+                let color_start = self.color_start;
+                let color_end = self.color_end;
+                Self::apply_colors(domain, color_start, color_end);
+            }
 
             if let Some(domain) = self.domain_history.last() {
                 ui.label("Current domain:");
@@ -122,6 +163,11 @@ impl eframe::App for MandelbrotApp {
                     if let Some(domain) = self.domain_history.pop() {
                         self.domain_future.push(domain);
                     }
+                    if let Some(domain) = self.domain_history.last_mut() {
+                        let color_start = self.color_start;
+                        let color_end = self.color_end;
+                        Self::apply_colors(domain, color_start, color_end);
+                    }
                 }
                 if ui
                     .add_enabled(!self.domain_future.is_empty(), egui::Button::new("Next"))
@@ -130,28 +176,21 @@ impl eframe::App for MandelbrotApp {
                     if let Some(domain) = self.domain_future.pop() {
                         self.domain_history.push(domain);
                     }
+                    if let Some(domain) = self.domain_history.last_mut() {
+                        let color_start = self.color_start;
+                        let color_end = self.color_end;
+                        Self::apply_colors(domain, color_start, color_end);
+                    }
                 }
             });
             if ui.button("Generate image").clicked() {
-                self.update_image();
+                self.update_image(ctx);
             }
             if ui.button("Reset").clicked() {
                 self.domain_history.clear();
                 self.domain_future.clear();
-
-                let handle = ctx.load_texture(
-                    "mandelbrot buffer",
-                    self.image(Self::DEFAULT_DOMAIN),
-                    TextureOptions {
-                        magnification: TextureFilter::Nearest,
-                        ..Default::default()
-                    },
-                );
-
-                self.domain_history.push(Domain {
-                    rect: Self::DEFAULT_DOMAIN,
-                    texture: handle,
-                });
+                let new_domain = self.prepare_domain(ctx, Self::DEFAULT_DOMAIN);
+                self.domain_history.push(new_domain);
             }
         });
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -202,20 +241,8 @@ impl eframe::App for MandelbrotApp {
 
                 if new_domain.width() > 0.0 && new_domain.height() > 0.0 {
                     self.domain_future.clear();
-
-                    let handle = ctx.load_texture(
-                        "mandelbrot buffer",
-                        self.image(new_domain),
-                        TextureOptions {
-                            magnification: TextureFilter::Nearest,
-                            ..Default::default()
-                        },
-                    );
-
-                    self.domain_history.push(Domain {
-                        rect: new_domain,
-                        texture: handle,
-                    });
+                    let prepared_domain = self.prepare_domain(ctx, new_domain);
+                    self.domain_history.push(prepared_domain);
                 }
             }
         });
