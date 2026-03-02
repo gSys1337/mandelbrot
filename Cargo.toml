@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-num = "0.4"
+num = {version = "0.4", features = ["num-bigint"]}
 eframe = "0.33"
 rayon = "1.11.0"
+astro-float = "0.9.5"
 
 [dev-dependencies]
 rand = "0.10.0"

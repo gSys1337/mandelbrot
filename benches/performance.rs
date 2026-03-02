@@ -1,10 +1,10 @@
-use eframe::egui::{Rect, pos2, vec2};
-use mandelbrot_test::mandel_set::Domain;
+use mandelbrot_test::mandel_set::Restriction;
+use num::Complex;
 use std::time::Instant;
 
 fn main() {
-    let resolution = [2048, 2048];
-    let max_iterations = 200; // High enough to show parallel advantages
+    let resolution = [1000, 1000];
+    let max_iterations = 5; // High enough to show parallel advantages
     let num_restrictions = 3;
     let num_runs_per_restriction = 5;
 
@@ -20,29 +20,35 @@ fn main() {
 
     for i in 0..num_restrictions {
         // Generate a random viewport near typical mandelbrot regions
-        let x_0 = rand::random::<f32>() * 2.0 - 1.0; // [-1.0, 1.0]
-        let y_0 = rand::random::<f32>() * 2.0 - 1.0; // [-1.0, 1.0]
-        let d_x = rand::random::<f32>() * 1.0 - 0.5; // [-0.5, 0.5]
-        let d_y = rand::random::<f32>() * 1.0 - 0.5; // [-0.5, 0.5]
+        let x_0 = rand::random::<f64>() * 4.0 - 2.0; // [-2.0, 2.0]
+        let y_0 = rand::random::<f64>() * 4.0 - 2.0; // [-2.0, 2.0]
+        let x_1 = rand::random::<f64>() * 4.0 - 2.0; // [-2.0, 2.0]
+        let y_1 = rand::random::<f64>() * 4.0 - 2.0; // [-2.0, 2.0]
 
-        let restriction = Rect::from_center_size(pos2(x_0, y_0), vec2(d_x, d_y));
+        let restriction = Restriction::from_two_points(
+            Complex::new(x_0, y_0),
+            Complex::new(x_1, y_1),
+            resolution[0],
+            resolution[1],
+        );
 
         println!("Restriction {}: {:?}", i + 1, restriction);
+        let domain = restriction.into_domain();
 
         let mut seq_durations = Vec::new();
         let mut par_durations = Vec::new();
 
         for _ in 0..num_runs_per_restriction {
             // Sequential
-            let domain_seq = Domain::new(restriction, resolution);
             let start_seq = Instant::now();
-            let _ = domain_seq.generate_image_by_rayon(max_iterations, false);
+            let _ = domain.clone().calculate_image(max_iterations);
             seq_durations.push(start_seq.elapsed());
 
             // Parallel
-            let domain_par = Domain::new(restriction, resolution);
             let start_par = Instant::now();
-            let _ = domain_par.generate_image_by_rayon(max_iterations, true);
+            let _ = domain
+                .clone()
+                .calculate_image_by_rayon(max_iterations, true);
             par_durations.push(start_par.elapsed());
         }
 
